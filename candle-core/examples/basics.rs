@@ -7,11 +7,38 @@ extern crate accelerate_src;
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 
-fn main() -> Result<()> {
-    let a = Tensor::new(&[[0.0f32, 1.0, 2.0], [3.0, 4.0, 5.0]], &Device::Cpu)?;
-    let b = Tensor::new(&[[88.0f32, 99.0]], &Device::Cpu)?;
-    let new_a = a.slice_scatter(&b, 1, 2)?;
-    assert_eq!(a.to_vec2::<f32>()?, [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]);
-    assert_eq!(new_a.to_vec2::<f32>()?, [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]);
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Instantiates instance of WebGPU
+    let instance = wgpu::Instance::default();
+
+    // `request_adapter` instantiates the general connection to the GPU
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .unwrap();
+
+    // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
+    //  `features` being the available features.
+    let (device, queue) = adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_defaults(),
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let device = Device::new_wgpu(device, queue).unwrap();
+    let a = Tensor::rand(0.0, 1.0, 3, &device).unwrap();
+    let b = Tensor::rand(0.0, 1.0, 3, &device).unwrap();
+    dbg!(&a);
+    dbg!(&b);
+    let r = a.mul(&b);
+    dbg!(r);
     Ok(())
 }

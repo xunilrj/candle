@@ -608,6 +608,7 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(_) => todo!(),
         }
     }
 
@@ -1623,6 +1624,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1654,6 +1656,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(_) => todo!(),
         }
     }
 
@@ -1695,6 +1698,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(_) => todo!(),
         }
     }
 
