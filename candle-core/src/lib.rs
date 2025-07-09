@@ -86,6 +86,8 @@ mod tensor_cat;
 pub mod test_utils;
 pub mod utils;
 mod variable;
+// #[cfg(feature = "vulkan")]
+pub mod vulkan_backend;
 
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
@@ -123,6 +125,9 @@ extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
+
+//#[cfg(feature = "vulkan")]
+pub use vulkan_backend::{VulkanDevice, VulkanStorage};
 
 pub trait ToUsize2 {
     fn to_usize2(self) -> (usize, usize);

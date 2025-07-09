@@ -11,6 +11,7 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
+ash.workspace = true
 byteorder = { workspace = true }
 candle-kernels = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
@@ -26,6 +27,7 @@ num_cpus = { workspace = true }
 rand = { workspace = true }
 rand_distr = { workspace = true }
 rayon = { workspace = true }
+rspirv.workspace = true
 safetensors = { workspace = true }
 thiserror = { workspace = true }
 ug-cuda = { workspace = true, optional = true }

@@ -1,7 +1,10 @@
 use crate::backend::BackendStorage;
 use crate::op::{self, CmpOp, ReduceOp};
 use crate::scalar::Scalar;
-use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
+use crate::{
+    CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape,
+    VulkanStorage,
+};
 use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
@@ -11,6 +14,7 @@ pub enum Storage {
     Cpu(CpuStorage),
     Cuda(CudaStorage),
     Metal(MetalStorage),
+    Vulkan(VulkanStorage),
 }
 
 impl Storage {
@@ -25,6 +29,7 @@ impl Storage {
                 let storage = storage.try_clone(layout)?;
                 Ok(Self::Metal(storage))
             }
+            _ => todo!(),
         }
     }
 
@@ -33,6 +38,7 @@ impl Storage {
             Self::Cpu(_) => Device::Cpu,
             Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
             Self::Metal(storage) => Device::Metal(storage.device().clone()),
+            Self::Vulkan(storage) => Device::Vulkan(storage.device().clone()),
         }
     }
 
@@ -41,6 +47,7 @@ impl Storage {
             Self::Cpu(storage) => storage.dtype(),
             Self::Cuda(storage) => storage.dtype(),
             Self::Metal(storage) => storage.dtype(),
+            Self::Vulkan(storage) => storage.dtype(),
         }
     }
 
@@ -79,6 +86,7 @@ impl Storage {
             Storage::Cpu(storage) => storage.const_set(v, l),
             Storage::Cuda(storage) => storage.const_set(v, l),
             Storage::Metal(storage) => storage.const_set(v, l),
+            _ => todo!(),
         }
     }
 
@@ -96,6 +104,7 @@ impl Storage {
                 let storage = storage.affine(layout, mul, add)?;
                 Ok(Self::Metal(storage))
             }
+            _ => todo!(),
         }
     }
 
@@ -113,6 +122,7 @@ impl Storage {
                 let storage = storage.powf(layout, alpha)?;
                 Ok(Self::Metal(storage))
             }
+            _ => todo!(),
         }
     }
 
@@ -130,6 +140,7 @@ impl Storage {
                 let storage = storage.elu(layout, alpha)?;
                 Ok(Self::Metal(storage))
             }
+            _ => todo!(),
         }
     }
 
@@ -182,6 +193,7 @@ impl Storage {
                 let storage = storage.reduce_op(op, layout, s)?;
                 Ok(Self::Metal(storage))
             }
+            _ => todo!(),
         }
     }
 
@@ -199,6 +211,7 @@ impl Storage {
                 let storage = storage.to_dtype(layout, dtype)?;
                 Ok(Self::Metal(storage))
             }
+            _ => todo!(),
         }
     }
 
@@ -216,6 +229,7 @@ impl Storage {
                 let (storage, shape) = c.metal_fwd(storage, l)?;
                 Ok((Self::Metal(storage), shape))
             }
+            _ => todo!(),
         }
     }
 
@@ -277,6 +291,7 @@ impl Storage {
             Self::Cpu(storage) => c.cpu_fwd(storage, l),
             Self::Cuda(storage) => c.cuda_fwd(storage, l),
             Self::Metal(storage) => c.metal_fwd(storage, l),
+            _ => todo!(),
         }
     }
 
@@ -331,6 +346,7 @@ impl Storage {
                 let storage = storage.unary_impl::<B>(layout)?;
                 Ok(Self::Metal(storage))
             }
+            _ => todo!(),
         }
     }
 
@@ -354,6 +370,10 @@ impl Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::Vulkan(lhs), Self::Vulkan(rhs)) => {
+                let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::Vulkan(storage))
             }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
@@ -511,6 +531,7 @@ impl Storage {
                 let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
             }
+            _ => todo!(),
         }
     }
 
@@ -533,6 +554,7 @@ impl Storage {
                 let storage = storage.max_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
             }
+            _ => todo!(),
         }
     }
 
@@ -550,6 +572,7 @@ impl Storage {
                 let storage = storage.upsample_nearest1d(layout, sz)?;
                 Ok(Self::Metal(storage))
             }
+            _ => todo!(),
         }
     }
 
@@ -567,6 +590,7 @@ impl Storage {
                 let storage = storage.upsample_nearest2d(layout, h, w)?;
                 Ok(Self::Metal(storage))
             }
+            _ => todo!(),
         }
     }
 
