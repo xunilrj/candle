@@ -2,13 +2,7 @@ use std::{ffi::c_char, rc::Rc};
 
 use ash::{
     vk::{
-        ApplicationInfo, BufferCreateInfo, CommandBufferAllocateInfo, CommandBufferBeginInfo,
-        CommandBufferUsageFlags, CommandPoolCreateFlags, CommandPoolCreateInfo,
-        DescriptorBufferInfo, DescriptorPoolCreateFlags, DescriptorPoolCreateInfo,
-        DescriptorPoolSize, DescriptorSetAllocateInfo, DescriptorSetLayoutBinding, DescriptorType,
-        DeviceCreateInfo, DeviceMemory, DeviceQueueCreateInfo, FenceCreateInfo, InstanceCreateInfo,
-        PipelineBindPoint, SemaphoreGetZirconHandleInfoFUCHSIA, ShaderModuleCreateInfo,
-        ShaderStageFlags, SpecializationInfo, SubmitInfo, WriteDescriptorSet,
+        self, ApplicationInfo, Buffer, BufferCreateInfo, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, CommandPoolCreateFlags, CommandPoolCreateInfo, DescriptorBufferInfo, DescriptorPoolCreateFlags, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorSetAllocateInfo, DescriptorSetLayoutBinding, DescriptorType, DeviceCreateInfo, DeviceMemory, DeviceQueueCreateInfo, Fence, FenceCreateInfo, InstanceCreateInfo, PipelineBindPoint, SemaphoreGetZirconHandleInfoFUCHSIA, ShaderModuleCreateInfo, ShaderStageFlags, SpecializationInfo, SubmitInfo, WriteDescriptorSet
     },
     Entry, Instance,
 };
@@ -49,6 +43,120 @@ struct VkHandles {
     pipeline_layout: ash::vk::PipelineLayout,
     group_0: ash::vk::DescriptorSetLayout,
     group_1: ash::vk::DescriptorSetLayout,
+    command_pool: ash::vk::CommandPool,
+    command_buffers: Vec<ash::vk::CommandBuffer>,
+    descriptor_pool: ash::vk::DescriptorPool,
+}
+
+#[repr(u32)]
+enum KernelMethod {
+    None = 0,
+    Add = 1,
+    Sub = 2,
+}
+
+#[repr(C)]
+struct PushConstants {
+    method: KernelMethod
+}
+
+fn dispatch_binary(handles: &VkHandles, cmd_buffer_i: usize, method: KernelMethod, l: Buffer, r: Buffer, o: Buffer, group: (u32, u32, u32), fence: Fence) {
+    let command_buffer = handles.command_buffers[cmd_buffer_i];
+
+    unsafe {
+        let begin_info =
+            CommandBufferBeginInfo::default().flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        handles
+            .device
+            .begin_command_buffer(command_buffer, &begin_info);
+        handles.device.cmd_bind_pipeline(
+            command_buffer,
+            PipelineBindPoint::COMPUTE,
+            handles.pipeline,
+        );
+
+        // group 0 and group 1
+        let set_layouts = [handles.group_0, handles.group_1];
+        let allocate_info = DescriptorSetAllocateInfo::default()
+            .set_layouts(&set_layouts)
+            .descriptor_pool(handles.descriptor_pool);
+        let descriptor_sets = handles
+            .device
+            .allocate_descriptor_sets(&allocate_info)
+            .unwrap();
+
+        // Group 0
+        let buffer_info = [
+            DescriptorBufferInfo::default()
+                .buffer(l)
+                .range(ash::vk::WHOLE_SIZE),
+            DescriptorBufferInfo::default()
+                .buffer(r)
+                .range(ash::vk::WHOLE_SIZE),
+        ];
+        let g0 = WriteDescriptorSet::default()
+            .buffer_info(&buffer_info)
+            .dst_set(descriptor_sets[0])
+            .descriptor_count(2)
+            .descriptor_type(DescriptorType::STORAGE_BUFFER_DYNAMIC);
+
+        // Group 1
+        let buffer_info = [DescriptorBufferInfo::default()
+            .buffer(o)
+            .range(ash::vk::WHOLE_SIZE)];
+        let g1 = WriteDescriptorSet::default()
+            .buffer_info(&buffer_info)
+            .dst_set(descriptor_sets[1])
+            .descriptor_count(1)
+            .descriptor_type(DescriptorType::STORAGE_BUFFER_DYNAMIC);
+
+        let descriptor_writes = vec![g0, g1];
+        let descriptor_copies = vec![];
+        handles
+            .device
+            .update_descriptor_sets(&descriptor_writes, &descriptor_copies);
+
+        let dynamic_offsets = [0, 0, 0];
+        handles.device.cmd_bind_descriptor_sets(
+            command_buffer,
+            PipelineBindPoint::COMPUTE,
+            handles.pipeline_layout,
+            0,
+            &descriptor_sets,
+            &dynamic_offsets,
+        );
+
+        let constants = std::slice::from_raw_parts(
+            &PushConstants { method } as *const PushConstants as *const u8,
+            std::mem::size_of::<PushConstants>()
+        );
+        handles.device.cmd_push_constants(
+            command_buffer,
+            handles.pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            constants,
+        );
+        handles
+            .device
+            .cmd_dispatch(command_buffer, group.0, group.1, group.2);
+        handles
+            .device
+            .end_command_buffer(command_buffer)
+            .unwrap();
+
+        let command_buffers = [command_buffer];
+        let submits = [SubmitInfo::default().command_buffers(&command_buffers)];
+        handles
+            .device
+            .queue_submit(handles.queue, &submits, fence)
+            .unwrap();
+
+        handles
+            .device
+            .wait_for_fences(&[fence], true, u64::MAX)
+            .unwrap();
+    }
 }
 
 impl BackendDevice for VulkanDevice {
@@ -188,7 +296,7 @@ impl BackendDevice for VulkanDevice {
                     | ash::vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS_EXT,
             )
             .module(module)
-            .name(std::ffi::CStr::from_bytes_with_nul(b"kernel_add\0").unwrap())
+            .name(std::ffi::CStr::from_bytes_with_nul(b"main\0").unwrap())
             .specialization_info(&spec)
             .stage(ash::vk::ShaderStageFlags::COMPUTE);
 
@@ -206,6 +314,37 @@ impl BackendDevice for VulkanDevice {
         .next()
         .unwrap();
 
+        // CommandPool
+        let command_pool = unsafe {
+            let create_info = CommandPoolCreateInfo::default()
+                .queue_family_index(queue_family_index)
+                .flags(CommandPoolCreateFlags::TRANSIENT);
+            device
+                .create_command_pool(&create_info, None)
+                .unwrap()
+        };
+
+        // CommandBuffers
+        let command_buffers = unsafe {
+            let allocate_info = CommandBufferAllocateInfo::default()
+                .command_buffer_count(1)
+                .command_pool(command_pool);
+            device
+                .allocate_command_buffers(&allocate_info)
+                .unwrap()
+        };
+
+        // Descriptor Pool
+        let descriptor_pool =  unsafe {
+            let pool_sizes = [DescriptorPoolSize::default().descriptor_count(16).ty(DescriptorType::STORAGE_BUFFER_DYNAMIC)];
+            let create_info = DescriptorPoolCreateInfo::default()
+                .pool_sizes(&pool_sizes)
+                .max_sets(16);
+            device
+                .create_descriptor_pool(&create_info, None)
+                .unwrap()
+        };
+
         Ok(Self {
             id: DeviceId(ordinal),
             handles: Rc::new(VkHandles {
@@ -218,6 +357,9 @@ impl BackendDevice for VulkanDevice {
                 pipeline_layout,
                 group_0,
                 group_1,
+                command_pool,
+                command_buffers,
+                descriptor_pool
             }),
         })
     }
@@ -436,7 +578,17 @@ impl BackendStorage for VulkanStorage {
         l: &crate::Layout,
         r: &crate::Layout,
     ) -> crate::Result<Self> {
-        let len = l.shape().dims1().unwrap();
+        let method = match B::NAME {
+            "add" => KernelMethod::Add,
+            "sub" => KernelMethod::Sub,
+            name => todo!("{name}"),
+        };
+
+        let len = match l.shape().dims() {
+            [a] => *a,
+            [a, b] => a * b,
+            dims => todo!("{dims:?}"),
+        };
 
         let size = match self.dtype {
             DType::U8 => todo!(),
@@ -456,114 +608,6 @@ impl BackendStorage for VulkanStorage {
         );
 
         unsafe {
-            let create_info = CommandPoolCreateInfo::default()
-                .queue_family_index(self.device.handles.queue_family_index)
-                .flags(CommandPoolCreateFlags::TRANSIENT);
-            let command_pool = self
-                .device
-                .handles
-                .device
-                .create_command_pool(&create_info, None)
-                .unwrap();
-
-            let allocate_info = CommandBufferAllocateInfo::default()
-                .command_buffer_count(1)
-                .command_pool(command_pool);
-            let command_buffers = self
-                .device
-                .handles
-                .device
-                .allocate_command_buffers(&allocate_info)
-                .unwrap();
-
-            let begin_info =
-                CommandBufferBeginInfo::default().flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            self.device
-                .handles
-                .device
-                .begin_command_buffer(command_buffers[0], &begin_info);
-            self.device.handles.device.cmd_bind_pipeline(
-                command_buffers[0],
-                PipelineBindPoint::COMPUTE,
-                self.device.handles.pipeline,
-            );
-
-            // Descriptor Pool
-            let pool_sizes = [DescriptorPoolSize::default().descriptor_count(16).ty(DescriptorType::STORAGE_BUFFER_DYNAMIC)];
-            let create_info = DescriptorPoolCreateInfo::default()
-                .pool_sizes(&pool_sizes)
-                .max_sets(16);
-            let descriptor_pool = self
-                .device
-                .handles
-                .device
-                .create_descriptor_pool(&create_info, None)
-                .unwrap();
-
-            // group 0 and group 1
-            let set_layouts = [self.device.handles.group_0, self.device.handles.group_1];
-            let allocate_info = DescriptorSetAllocateInfo::default()
-                .set_layouts(&set_layouts)
-                .descriptor_pool(descriptor_pool);
-            let descriptor_sets = self
-                .device
-                .handles
-                .device
-                .allocate_descriptor_sets(&allocate_info)
-                .unwrap();
-
-            // Group 0
-            let buffer_info = [
-                DescriptorBufferInfo::default()
-                    .buffer(self.buffer)
-                    .range(ash::vk::WHOLE_SIZE),
-                DescriptorBufferInfo::default()
-                    .buffer(other.buffer)
-                    .range(ash::vk::WHOLE_SIZE),
-            ];
-            let g0 = WriteDescriptorSet::default()
-                .buffer_info(&buffer_info)
-                .dst_set(descriptor_sets[0])
-                .descriptor_count(2)
-                .descriptor_type(DescriptorType::STORAGE_BUFFER_DYNAMIC);
-
-            // Group 1
-            let buffer_info = [DescriptorBufferInfo::default()
-                .buffer(buffer)
-                .range(ash::vk::WHOLE_SIZE)];
-            let g1 = WriteDescriptorSet::default()
-                .buffer_info(&buffer_info)
-                .dst_set(descriptor_sets[1])
-                .descriptor_count(1)
-                .descriptor_type(DescriptorType::STORAGE_BUFFER_DYNAMIC);
-
-            let descriptor_writes = vec![g0, g1];
-            let descriptor_copies = vec![];
-            self.device
-                .handles
-                .device
-                .update_descriptor_sets(&descriptor_writes, &descriptor_copies);
-
-            let dynamic_offsets = [0, 0, 0];
-            self.device.handles.device.cmd_bind_descriptor_sets(
-                command_buffers[0],
-                PipelineBindPoint::COMPUTE,
-                self.device.handles.pipeline_layout,
-                0,
-                &descriptor_sets,
-                &dynamic_offsets,
-            );
-
-            self.device
-                .handles
-                .device
-                .cmd_dispatch(command_buffers[0], len as u32, 1, 1);
-            self.device
-                .handles
-                .device
-                .end_command_buffer(command_buffers[0])
-                .unwrap();
-
             let create_info = FenceCreateInfo::default();
             let fence = self
                 .device
@@ -572,24 +616,13 @@ impl BackendStorage for VulkanStorage {
                 .create_fence(&create_info, None)
                 .unwrap();
 
-            let command_buffers = [command_buffers[0]];
-            let submits = [SubmitInfo::default().command_buffers(&command_buffers)];
-            self.device
-                .handles
-                .device
-                .queue_submit(self.device.handles.queue, &submits, fence)
-                .unwrap();
+            dispatch_binary(&self.device.handles, 0, method, self.buffer, other.buffer, buffer, (len as u32, 1, 1), fence);
 
-            self.device
+            self
+                .device
                 .handles
                 .device
-                .wait_for_fences(&[fence], true, u64::MAX)
-                .unwrap();
-
-            self.device
-                .handles
-                .device
-                .destroy_command_pool(command_pool, None);
+                .destroy_fence(fence, None);
         }
 
         Ok(Self {
@@ -825,12 +858,40 @@ fn create_buffer(
     (buffer, memory, mem_requirements.size)
 }
 
-#[test]
-fn vulkan_basics() {
-    let device = Device::new_vulkan(0).unwrap();
-    let a = Tensor::new(&[0.0f32, 1.0, 2.0], &device).unwrap();
-    let b = Tensor::new(&[1.0f32, 2.0, 3.0], &device).unwrap();
-    let c = a.add(&b).unwrap();
+macro_rules! t {
+    ($b:expr) => {
+        let f = $b;
 
-    assert_eq!(c.to_vec1::<f32>().unwrap().as_slice(), [1.0, 3.0, 5.0]);
+        let (c_vulkan, d_vulkan) = f(Device::new_vulkan(0).unwrap());
+        let (c_cpu, d_cpu) = f(Device::Cpu);
+
+        assert_eq!(c_vulkan, c_cpu);
+        assert_eq!(d_vulkan, d_cpu);
+    };
+}
+
+#[test]
+fn vulkan_basics_dims_1() {
+    t! {|device: Device| {
+        let a = Tensor::new(&[0.0f32, 1.0, 2.0], &device).unwrap();
+        let b = Tensor::new(&[1.0f32, 2.0, 3.0], &device).unwrap();
+
+        let c = a.add(&b).unwrap();
+        let d = a.sub(&b).unwrap();
+
+        (c.to_vec1::<f32>().unwrap(), d.to_vec1::<f32>().unwrap())
+    }};
+}
+
+#[test]
+fn vulkan_basics_dims_2() {
+     t! {|device: Device| {
+        let a = Tensor::new(&[0.0f32, 1.0, 2.0, 3.0], &device).unwrap().reshape((2, 2)).unwrap();
+        let b = Tensor::new(&[1.0f32, 2.0, 3.0, 4.0], &device).unwrap().reshape((2, 2)).unwrap();
+
+        let c = a.add(&b).unwrap();
+        let d = a.sub(&b).unwrap();
+
+        (c.to_vec2::<f32>().unwrap(), d.to_vec2::<f32>().unwrap())
+    }};
 }
